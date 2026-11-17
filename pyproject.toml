@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "loopxdino"
+version = "0.1.0"
+description = "Iterative System-2 Reasoning for Dense Vision on 16GB Consumer GPUs"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "axjing" }
+]
+dependencies = [
+    "torch>=2.5.0",
+    "torchvision",
+    "transformers",
+    "accelerate",
+    "einops",
+    "matplotlib",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "ruff",
+]
+
+[tool.setuptools.packages.find]
+include = ["core*", "loopxdino*"]
