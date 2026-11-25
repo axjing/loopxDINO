@@ -1,6 +1,6 @@
 import torch
 
-from core.decoder import LoopedCrossAttentionDecoder
+from loopxdino.decoder import LoopedCrossAttentionDecoder
 
 
 def test_decoder_parameter_budget():
@@ -72,6 +72,7 @@ def test_adaln_step_modulation_and_norm_stability():
     loss = out.sum()
     loss.backward()
     assert decoder_adaln.step_mod.weight.grad is not None
+    assert decoder_adaln.residual_alpha.grad is not None
 
     # Check norm stability across 8 loops (should remain well-bounded)
     norms = [q.norm(dim=-1).mean().item() for q in traj]

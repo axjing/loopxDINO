@@ -93,6 +93,15 @@ class LoopedCrossAttentionDecoder(nn.Module):
         # Final LayerNorm for output stability
         self.final_norm = nn.LayerNorm(d_model)
 
+        # Learnable residual contraction damping parameter (alpha in [0, 1]).
+        # Controls the residual connection strength: q_next = alpha * q_residual + (1-alpha) * q_identity
+        # Initialized at 0.9 (near-identity) for warm-start compatibility.
+        # Clamped to [0, 1] during forward to guarantee strict contraction on S^{D-1}.
+        self.residual_alpha = nn.Parameter(torch.tensor(0.9))
+
+        # Preallocated step index buffer for CUDA Graph capture and zero-host-transfer loops
+        self.register_buffer("step_indices", torch.arange(max_loops, dtype=torch.long), persistent=False)
+
         self._init_weights()
         self._verify_parameter_budget()
 
@@ -133,10 +142,12 @@ class LoopedCrossAttentionDecoder(nn.Module):
         q_norm: torch.Tensor,
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
         return_attn_weights: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Computes multi-head cross attention with batch_first=True.
+        Supports Mask-Guided attention bias for iterative boundary refinement.
         """
         B, L_q, D = q_norm.shape
         _, S_v, _ = k_cache.shape
@@ -155,6 +166,8 @@ class LoopedCrossAttentionDecoder(nn.Module):
         if return_attn_weights:
             # Explicit attention map computation for visualization
             attn_scores = torch.matmul(q, k.transpose(-2, -1)) * scale
+            if attn_bias is not None:
+                attn_scores = attn_scores + attn_bias
             attn_weights = F.softmax(attn_scores, dim=-1)
             context = torch.matmul(attn_weights, v)
             # Average attention weights across heads for visualization: (B, L_q, S_v)
@@ -162,7 +175,7 @@ class LoopedCrossAttentionDecoder(nn.Module):
         else:
             # Scaled Dot Product Attention (FlashAttention / PyTorch SDPA)
             context = F.scaled_dot_product_attention(
-                q, k, v, scale=scale, is_causal=False
+                q, k, v, attn_mask=attn_bias, scale=scale, is_causal=False
             )
             mean_attn = None
 
@@ -177,11 +190,13 @@ class LoopedCrossAttentionDecoder(nn.Module):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         step_idx: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
         return_attn_weights: bool = False,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         """
         Single step reasoning iteration.
-        Supports both modern adaLN (Adaptive LayerNorm) and legacy additive conditioning.
+        Supports both modern adaLN (Adaptive LayerNorm) and legacy additive conditioning,
+        along with optional Mask-Guided Attention Bias (attn_bias).
         """
         if self.use_step_embed and self.step_mode == "adaln":
             mod = self.step_mod(step_idx)
@@ -197,18 +212,24 @@ class LoopedCrossAttentionDecoder(nn.Module):
                 )
                 q = q + self_out
 
-            # 2. Cross Attention with adaLN
+            # 2. Cross Attention with adaLN & Mask Guidance
             q_norm_cross = self.norm_cross(q) * (1.0 + gamma_c) + beta_c
             cross_out, attn_map = self._cross_attention_step(
-                q_norm_cross, k_cache, v_cache, return_attn_weights=return_attn_weights
+                q_norm_cross,
+                k_cache,
+                v_cache,
+                attn_bias=attn_bias,
+                return_attn_weights=return_attn_weights,
             )
             q = q + cross_out
 
             # 3. FFN with adaLN
             q_norm_ffn = self.norm_ffn(q) * (1.0 + gamma_f) + beta_f
             ffn_out = self.ffn(q_norm_ffn)
-            # Normalization per loop guarantees state contraction and prevents norm explosion
-            q_next = self.final_norm(q + ffn_out)
+            # Contraction-damped residual: alpha controls residual strength,
+            # clamped to [0,1] for guaranteed Lipschitz contraction on S^{D-1}.
+            alpha = self.residual_alpha.clamp(0.0, 1.0)
+            q_next = self.final_norm(alpha * (q + ffn_out) + (1.0 - alpha) * q)
             return q_next, attn_map
 
         else:
@@ -230,7 +251,11 @@ class LoopedCrossAttentionDecoder(nn.Module):
 
             q_norm_cross = self.norm_cross(q_cur)
             cross_out, attn_map = self._cross_attention_step(
-                q_norm_cross, k_cache, v_cache, return_attn_weights=return_attn_weights
+                q_norm_cross,
+                k_cache,
+                v_cache,
+                attn_bias=attn_bias,
+                return_attn_weights=return_attn_weights,
             )
             q_cur = q_cur + cross_out
 
@@ -245,10 +270,11 @@ class LoopedCrossAttentionDecoder(nn.Module):
         k_cache: torch.Tensor,
         v_cache: torch.Tensor,
         step_idx: torch.Tensor,
+        attn_bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """Wrapper for activation checkpointing which returns only the tensor state."""
         out, _ = self._step_forward(
-            q, k_cache, v_cache, step_idx, return_attn_weights=False
+            q, k_cache, v_cache, step_idx, attn_bias=attn_bias, return_attn_weights=False
         )
         return out
 
@@ -257,6 +283,7 @@ class LoopedCrossAttentionDecoder(nn.Module):
         queries: torch.Tensor,
         visual_memory: torch.Tensor,
         num_loops: int = 4,
+        attn_biases: list[torch.Tensor | None] | None = None,
         return_trajectory: bool = False,
         return_attn_weights: bool = False,
     ) -> (
@@ -271,6 +298,7 @@ class LoopedCrossAttentionDecoder(nn.Module):
             queries: Input queries of shape (B, L_q, d_model).
             visual_memory: Frozen DINO visual tokens of shape (B, S_v, d_model).
             num_loops: Number of reasoning iterations (System 2 compute depth).
+            attn_biases: Optional list of spatial attention biases for each loop step (Mask Guidance).
             return_trajectory: Whether to return intermediate query states [Q_0, Q_1, ..., Q_N].
             return_attn_weights: Whether to return cross-attention heatmaps across loops.
 
@@ -287,23 +315,37 @@ class LoopedCrossAttentionDecoder(nn.Module):
         # KV Caching: Precompute static K and V once before loop
         k_cache, v_cache = self.precompute_kv(visual_memory)
 
-        device = queries.device
         trajectory = [queries] if return_trajectory else None
         attn_maps = [] if return_attn_weights else None
 
         q = queries
         for step in range(num_loops):
-            step_tensor = torch.tensor([step], device=device, dtype=torch.long)
+            step_tensor = self.step_indices[step]
+            step_bias = (
+                attn_biases[step]
+                if (attn_biases is not None and step < len(attn_biases))
+                else None
+            )
 
             if return_attn_weights:
                 q, attn_w = self._step_forward(
-                    q, k_cache, v_cache, step_tensor, return_attn_weights=True
+                    q,
+                    k_cache,
+                    v_cache,
+                    step_tensor,
+                    attn_bias=step_bias,
+                    return_attn_weights=True,
                 )
                 attn_maps.append(attn_w)
             elif (
                 self.training
                 and self.use_checkpoint
-                and (q.requires_grad or k_cache.requires_grad or v_cache.requires_grad)
+                and (
+                    q.requires_grad
+                    or k_cache.requires_grad
+                    or v_cache.requires_grad
+                    or (step_bias is not None and step_bias.requires_grad)
+                )
             ):
                 # Mandatory activation checkpointing during training to enforce O(1) memory
                 q = checkpoint(
@@ -312,11 +354,17 @@ class LoopedCrossAttentionDecoder(nn.Module):
                     k_cache,
                     v_cache,
                     step_tensor,
+                    step_bias,
                     use_reentrant=False,
                 )
             else:
                 q, _ = self._step_forward(
-                    q, k_cache, v_cache, step_tensor, return_attn_weights=False
+                    q,
+                    k_cache,
+                    v_cache,
+                    step_tensor,
+                    attn_bias=step_bias,
+                    return_attn_weights=False,
                 )
 
             if return_trajectory:

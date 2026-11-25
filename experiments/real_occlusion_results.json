@@ -1,0 +1,134 @@
+{
+  "baseline_a": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 82.19,
+      "Boundary_IoU": 56.05
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 65.08,
+      "Boundary_IoU": 41.83
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 42.89,
+      "Boundary_IoU": 26.96
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 22.88,
+      "Boundary_IoU": 15.32
+    }
+  ],
+  "baseline_c": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 82.59,
+      "Boundary_IoU": 55.35
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 65.73,
+      "Boundary_IoU": 38.9
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 43.32,
+      "Boundary_IoU": 23.44
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 23.81,
+      "Boundary_IoU": 13.01
+    }
+  ],
+  "loopxdino_t1": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 82.91,
+      "Boundary_IoU": 61.42
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 63.69,
+      "Boundary_IoU": 39.98
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 41.67,
+      "Boundary_IoU": 24.46
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 22.19,
+      "Boundary_IoU": 13.05
+    }
+  ],
+  "loopxdino_t2": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 83.66,
+      "Boundary_IoU": 63.33
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 63.23,
+      "Boundary_IoU": 39.95
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 41.59,
+      "Boundary_IoU": 23.58
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 19.77,
+      "Boundary_IoU": 11.43
+    }
+  ],
+  "loopxdino_t4": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 73.8,
+      "Boundary_IoU": 42.06
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 57.75,
+      "Boundary_IoU": 31.2
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 43.95,
+      "Boundary_IoU": 22.6
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 29.64,
+      "Boundary_IoU": 17.32
+    }
+  ],
+  "loopxdino_act": [
+    {
+      "occlusion": 0.0,
+      "mIoU": 82.91,
+      "Boundary_IoU": 61.42
+    },
+    {
+      "occlusion": 0.2,
+      "mIoU": 63.69,
+      "Boundary_IoU": 39.98
+    },
+    {
+      "occlusion": 0.4,
+      "mIoU": 41.67,
+      "Boundary_IoU": 24.46
+    },
+    {
+      "occlusion": 0.6,
+      "mIoU": 22.19,
+      "Boundary_IoU": 13.05
+    }
+  ]
+}

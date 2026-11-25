@@ -1,6 +1,6 @@
 import torch
 
-from core.act import (
+from loopxdino.act import (
     DifferentiableACTController,
     MultiStepCascadeLoss,
     PonderLoss,

@@ -3,6 +3,9 @@ Data pipeline for Pascal VOC 2012 Semantic Segmentation.
 Supports official VOCSegmentation and synthetic fallback for fast smoke-testing.
 """
 
+import random
+
+import numpy as np
 import torch
 import torchvision.transforms.functional as TF
 from torch.utils.data import DataLoader, Dataset
@@ -91,17 +94,48 @@ class VOCSegmentationDataset(Dataset):
 
         image, target = self.dataset[idx]
 
-        # Resize image using bilinear and target mask using nearest neighbor
-        image = TF.resize(
-            image,
-            [self.img_size, self.img_size],
-            interpolation=InterpolationMode.BILINEAR,
-        )
-        target = TF.resize(
-            target,
-            [self.img_size, self.img_size],
-            interpolation=InterpolationMode.NEAREST,
-        )
+        # Aligned spatial augmentations for training
+        if self.image_set == "train":
+            # 1. Random horizontal flip (p=0.5)
+            if random.random() > 0.5:
+                image = TF.hflip(image)
+                target = TF.hflip(target)
+
+            # 2. Mild random scaling (0.9 to 1.1) with crop / pad
+            scale = random.uniform(0.9, 1.1)
+            new_size = int(self.img_size * scale)
+            image = TF.resize(
+                image, [new_size, new_size], interpolation=InterpolationMode.BILINEAR
+            )
+            target = TF.resize(
+                target, [new_size, new_size], interpolation=InterpolationMode.NEAREST
+            )
+
+            if new_size > self.img_size:
+                top = random.randint(0, new_size - self.img_size)
+                left = random.randint(0, new_size - self.img_size)
+                image = TF.crop(image, top, left, self.img_size, self.img_size)
+                target = TF.crop(target, top, left, self.img_size, self.img_size)
+            elif new_size < self.img_size:
+                pad_h = self.img_size - new_size
+                pad_w = self.img_size - new_size
+                p_t = pad_h // 2
+                p_b = pad_h - p_t
+                p_l = pad_w // 2
+                p_r = pad_w - p_l
+                image = TF.pad(image, [p_l, p_t, p_r, p_b], fill=0)
+                target = TF.pad(target, [p_l, p_t, p_r, p_b], fill=IGNORE_LABEL)
+        else:
+            image = TF.resize(
+                image,
+                [self.img_size, self.img_size],
+                interpolation=InterpolationMode.BILINEAR,
+            )
+            target = TF.resize(
+                target,
+                [self.img_size, self.img_size],
+                interpolation=InterpolationMode.NEAREST,
+            )
 
         # Convert image to tensor and normalize with ImageNet stats
         img_tensor = TF.to_tensor(image)
@@ -110,9 +144,7 @@ class VOCSegmentationDataset(Dataset):
         )
 
         # Target mask to torch.long tensor
-        target_tensor = torch.as_tensor(
-            torch.from_numpy(torch.as_tensor(target).numpy()), dtype=torch.long
-        )
+        target_tensor = torch.from_numpy(np.array(target, dtype=np.int64))
         if target_tensor.dim() == 3:
             target_tensor = target_tensor.squeeze(0)
 

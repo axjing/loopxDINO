@@ -1,6 +1,6 @@
 import torch
 
-from core.baselines import (
+from loopxdino.baselines import (
     BaselineA_Linear,
     BaselineB_TransformerDecoder,
     BaselineC_TransformerDecoder,

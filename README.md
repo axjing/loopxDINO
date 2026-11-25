@@ -1,39 +1,25 @@
 # loopxDINO 🦖🔄
 
-**Iterative System-2 Reasoning for Dense Vision on 16GB Consumer GPUs.**
+**Dense Visual Prediction via Iterative Latent Reasoning on 16GB Consumer GPUs.**
 
+[![arXiv](https://img.shields.io/badge/arXiv-2611.29180-b31b1b.svg?style=for-the-badge)](https://arxiv.org/abs/2611.29180)
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.9.1+-EE4C2C.svg?style=for-the-badge&logo=pytorch)](https://pytorch.org/)
 [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg?style=for-the-badge&logo=python)](https://python.org/)
 [![Hardware](https://img.shields.io/badge/Hardware-RTX_5060_Ti_16GB-76B900.svg?style=for-the-badge&logo=nvidia)](https://nvidia.com/)
-[![Tests](https://img.shields.io/badge/Tests-24%2F24_Passed-success.svg?style=for-the-badge)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-30%2F30_Passed-success.svg?style=for-the-badge)](tests/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge)](LICENSE)
 
 ---
 
 ## 📌 Overview
 
-**loopxDINO** is an experimental architecture designed to break the "parameter-stacking" bottleneck in multimodal dense prediction tasks. This project upgrades visual foundation models from traditional "single-pass perception (System 1)" to "iterative latent reasoning (System 2)."
+**loopxDINO** is a principled architecture that shifts dense visual prediction from parameter-stacking feedforward expansion to **iterative latent reasoning** (System 2). This project elevates visual foundation architectures from traditional "single-pass perception (System 1)" to "deliberate test-time latent reasoning."
 
-By utilizing Meta's **DINOv3** as a strictly frozen perception backbone (KV Memory) and grafting a sub-10M parameter **Looped Cross-Attention Decoder** on top, loopxDINO achieves high-resolution, pixel-perfect dense understanding and edge purification on a single **NVIDIA RTX 5060 Ti (16GB VRAM)**.
+By utilizing Meta's **DINOv3** as a strictly frozen perception backbone (KV Memory) and grafting a compact **Looped Cross-Attention Decoder** on top, loopxDINO achieves high-resolution, pixel-perfect dense understanding and edge purification on a single **NVIDIA RTX 5060 Ti (16GB VRAM)**.
 
-```
-       [ Input Image (512x512) ]
-                   │
-      ┌────────────▼────────────┐
-      │   System 1: DINOv3 Base │  (Strictly Frozen, eval mode, requires_grad=False)
-      └────────────┬────────────┘
-                   │ Static KV Memory (Computed ONCE)
-                   ▼
-      ┌─────────────────────────┐
-      │   Looped Cross-Attn     │◄─── [ Query Tokens / Prompts ]
-      │      Decoder (System 2) │
-      │   (Shared Single-Layer) │──── Loop t = 0 .. N-1 (with Checkpoint & StepEmb)
-      └────────────┬────────────┘
-                   │
-      ┌────────────▼────────────┐
-      │ Dense Mask / Pred Head  │ ──► [ Edge-Purified Segmentation / Categories ]
-      └─────────────────────────┘
-```
+<p align="center">
+  <img src="assets/fig1_architecture.png" alt="loopxDINO Architecture" width="95%">
+</p>
 
 ---
 
@@ -43,8 +29,8 @@ By utilizing Meta's **DINOv3** as a strictly frozen perception backbone (KV Memo
 * **Test-Time Compute (ACT)**: Abandons rigid compute graphs. The model dynamically determines the number of loops based on scene complexity using normalized Shannon entropy halting, achieving $\sim 37.5\%$ compute savings on simpler scenes.
 * **Representation Collapse Prevention**: Injects a `Loop-step Embedding` at each iteration step to ensure cross-loop residual feature progression, preventing the over-smoothing and feature saturation common in standard looped architectures.
 * **Static KV Caching**: Visual features from the frozen backbone are projected into Key and Value memory exactly once prior to reasoning loops, eliminating redundant backbone passes.
-* **Multi-Step Cascade Loss**: Supervised across all intermediate reasoning iterations ($\mathcal{L}_{\text{total}} = \sum_{t=1}^N w_t \mathcal{L}_t$), forming a progressive distillation trajectory.
-* **Native FP8/BF16 Synergy**: Deeply optimized for RTX 50-series hardware and PyTorch 2.9+, supporting micro-batch gradient accumulation for simulated large-batch training.
+* **Multi-Step Cascade Loss & Mask-Guided Attention**: Supervised across all intermediate reasoning iterations ($\mathcal{L}_{\text{total}} = \sum_{t=1}^N w_t \mathcal{L}_t$) with cross-step spatial attention bias for iterative boundary refinement.
+* **CUDA Graph Static Execution & BF16 Synergy**: Supports static CUDA Graph capture (`LoopedCUDAGraphRunner`) to eliminate CPU dispatch overhead alongside `torch.bfloat16` mixed precision on RTX 50-series hardware.
 
 ---
 
@@ -52,12 +38,15 @@ By utilizing Meta's **DINOv3** as a strictly frozen perception backbone (KV Memo
 
 | Module | Source File | Description | Parameter Budget |
 | :--- | :--- | :--- | :---: |
-| **System 1 (Perception)** | [`core/backbone.py`](core/backbone.py) | Read-only DINOv3/DINOv2 ViT wrapper with offline structural mock fallback | 0 (Frozen) |
-| **System 2 (Reasoning)** | [`core/decoder.py`](core/decoder.py) | Single-layer looped cross-attention decoder with BPTT gradient checkpointing | **7.89M** ($<10\text{M}$) |
-| **ACT & Cascade Loss** | [`core/act.py`](core/act.py) | Shannon entropy early halting, ponder time tracker, and cascade loss | — |
-| **Task Heads** | [`core/heads.py`](core/heads.py) | Dense query-based mask segmentation head and token/sequence classifier | ~2.5M |
-| **Baselines** | [`core/baselines.py`](core/baselines.py) | Baseline-A (Linear), Baseline-B (2L Decoder), Baseline-C (6L Decoder) | 2.4M ~ 49.8M |
-| **Metrics Suite** | [`core/metrics.py`](core/metrics.py) | GPU-native mIoU and morphological Boundary IoU (bIoU) | — |
+| **System 1 (Perception)** | [`loopxdino/backbone.py`](loopxdino/backbone.py) | Read-only DINOv3/DINOv2 ViT wrapper with offline structural mock fallback | 0 (Frozen) |
+| **System 2 (Reasoning)** | [`loopxdino/decoder.py`](loopxdino/decoder.py) | Single-layer looped cross-attention decoder with BPTT gradient checkpointing | **7.89M** (Decoder) |
+| **ACT & Cascade Loss** | [`loopxdino/act.py`](loopxdino/act.py) | Shannon entropy early halting, ponder time tracker, and cascade loss | — |
+| **Task Heads** | [`loopxdino/heads.py`](loopxdino/heads.py) | Dense query-based mask segmentation head and token/sequence classifier | ~6.96M |
+| **Loss Functions** | [`loopxdino/loss.py`](loopxdino/loss.py) | Multi-class soft Dice loss and hybrid CE + Dice segmentation loss | — |
+| **CUDA Graph Engine** | [`loopxdino/cuda_graph.py`](loopxdino/cuda_graph.py) | Static CUDA Graph capture & replay runner for low-latency looped inference | — |
+| **Data Pipeline** | [`loopxdino/data.py`](loopxdino/data.py) | Pascal VOC 2012 segmentation dataset & synthetic smoke-test loader | — |
+| **Baselines** | [`loopxdino/baselines.py`](loopxdino/baselines.py) | Baseline-A (Linear), Baseline-B (2L Decoder), Baseline-C (6L Decoder) | 2.43M ~ 54.06M |
+| **Metrics Suite** | [`loopxdino/metrics.py`](loopxdino/metrics.py) | GPU-native mIoU and morphological Boundary IoU (bIoU) | — |
 
 ---
 
@@ -103,23 +92,23 @@ print(f"Refined reasoning features shape: {refined_features.shape}")
 
 ## 📊 Empirical Results & Benchmarks
 
-> 📄 For the comprehensive scientific and engineering experimental report with in-depth analysis, see [`docs/stage_experimental_report.md`](docs/stage_experimental_report.md).
-
 All benchmarks were evaluated on a single **NVIDIA GeForce RTX 5060 Ti (15.93 GB VRAM)** on Windows 11 in `torch.bfloat16` precision at $512 \times 512$ resolution.
 
 ### 1. Pascal VOC 2012 Dense Segmentation Benchmark
 
-Run script: `python scripts/benchmark_segmentation.py`
+Run script: `python scripts/run_systematic_benchmark.py` (results saved in [`experiments/benchmark_results.json`](experiments/benchmark_results.json))
 
 | Model | Decoder Architecture | Trainable Params | Peak Train VRAM | Inf VRAM | FPS | mIoU (%) | Boundary IoU (%) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Baseline-A** | Linear / Conv Projection (No System 2) | **2.43M** | 631.2 MB | 292.9 MB | **148.0** | 0.11% | 80.12%* |
-| **Baseline-B** | 2-Layer Transformer Decoder (Unshared) | 18.27M | 961.8 MB | 520.5 MB | 133.9 | 0.98% | 12.81% |
-| **Baseline-C** | 6-Layer Deep Transformer (Unshared) | 49.78M | 1317.1 MB | 792.7 MB | 123.2 | **1.28%** | **13.22%** |
-| **loopxDINO (Fixed N=4)** | 1-Layer Looped Shared ($N=4$, Checkpoint) | **10.40M** | 1405.0 MB | 979.8 MB | 120.3 | **1.19%** | **12.97%** |
-| **loopxDINO (Deep N=8)** | 1-Layer Looped Shared ($N=8$, Checkpoint) | **10.40M** | 1593.6 MB | 1167.8 MB | 113.4 | 1.12% | 12.06% |
+| **Baseline-A** | Linear / Conv Projection (No System 2) | **2.43M** | 1104.1 MB | 411.7 MB | **99.3** | 83.82% | 58.58% |
+| **Baseline-C** | 6-Layer Deep Transformer (Unshared) | 54.06M | 2059.4 MB | 560.7 MB | 82.3 | 84.57% | 57.60% |
+| **loopxDINO (T=1)** | 1-Layer Looped Shared ($T=1$) | 14.85M | 1690.0 MB | 595.9 MB | 87.4 | 84.76% | 63.26% |
+| **loopxDINO (T=2)** | 1-Layer Looped Shared ($T=2$, Checkpoint) | 14.85M | 1691.5 MB | 674.5 MB | 75.1 | **85.66%** | **65.01%** |
+| **loopxDINO (Dynamic ACT)** | 1-Layer Looped Shared (Entropy Halting) | 14.85M | 1692.5 MB | 596.9 MB | 87.3 | **85.66%** | **65.01%** |
 
-> **Key Takeaway**: loopxDINO reaches competitive reasoning accuracy against a 6-layer unshared Transformer Decoder (Baseline-C) while using **~80% fewer decoder parameters** (10.4M vs 49.8M) and operating at **120+ FPS**.
+> **Key Takeaway**: `loopxDINO (T=2)` and `Dynamic ACT` outperform the 6-layer unshared Transformer Decoder (`Baseline-C`) by **+1.09% mIoU** (`85.66%` vs `84.57%`) and **+7.41% Boundary IoU** (`65.01%` vs `57.60%`) while using **~72.5% fewer trainable parameters** (`14.85M` vs `54.06M`). With Dynamic ACT, loopxDINO preserves full `T=2` accuracy at `T=1` throughput (`87.3 FPS`).
+
+
 
 ### 2. $O(1)$ Activation VRAM Scaling
 
@@ -148,9 +137,9 @@ Run script: `python scripts/run_ablations.py`
 
 ### 4. Occlusion Robustness & ACT Allocation
 
-Run script: `python scripts/benchmark_robustness_act.py`
+Run scripts: `python scripts/eval_real_occlusion.py` (results in [`experiments/real_occlusion_results.json`](experiments/real_occlusion_results.json)) and `python scripts/benchmark_robustness_act.py`
 
-* Under 60% spatial patch occlusion, deep reasoning ($N=8$) improves boundary context recovery over single-pass perception.
+* Under **60% spatial patch occlusion** on Pascal VOC 2012 validation, deeper iterative reasoning (`loopxDINO T=4`) achieves **29.64% mIoU / 17.32% Boundary IoU**, outperforming `Baseline-A` (`22.88% / 15.32%`) and `Baseline-C` (`23.81% / 13.01%`).
 * Shannon entropy halting dynamically exits early on low-entropy samples, saving an average of **37.5%** of maximum computation.
 * Visual summary plot: [`assets/robustness_and_act_analysis.png`](assets/robustness_and_act_analysis.png).
 
@@ -163,28 +152,34 @@ All experiments and profilers can be reproduced via the following commands:
 ```powershell
 conda activate vision
 
+# 0. Download Pascal VOC 2012 dataset
+python scripts/download_voc.py
+
 # 1. Verify O(1) Activation VRAM scaling & gradient isolation
 python scripts/test_decoder_vram.py
 
-# 2. Run Pascal VOC Dense Segmentation side-by-side benchmark against Baselines
-python scripts/benchmark_segmentation.py
+# 2. Verify v2.0 multi-scale feature pyramid & Mask-Guided Looped Attention
+python scripts/verify_v2.py
 
-# 3. Evaluate step-by-step reasoning trajectory (Boundary IoU & edge purification)
+# 3. Run systematic Pascal VOC 2012 benchmark (produces experiments/benchmark_results.json)
+python scripts/run_systematic_benchmark.py
+
+# 4. Evaluate real patch occlusion robustness (produces experiments/real_occlusion_results.json)
+python scripts/eval_real_occlusion.py
+
+# 5. Evaluate step-by-step reasoning trajectory (Boundary IoU & edge purification)
 python scripts/eval_loop_trajectory.py
 
-# 4. Run the 5 comprehensive ablation studies
+# 6. Run the 5 comprehensive ablation studies
 python scripts/run_ablations.py
 
-# 5. Benchmark spatial occlusion robustness and ACT compute savings
-python scripts/benchmark_robustness_act.py
-
-# 6. Generate Attention Evolution Maps across reasoning loops
+# 7. Generate Attention Evolution Maps across reasoning loops
 python scripts/visualize_attention.py
 
-# 7. Train loopxDINO with multi-step cascade loss
+# 8. Train loopxDINO with multi-step cascade loss
 python train_segmentation.py --model_type loopxdino --epochs 2 --batch_size 4 --accum_steps 2
 
-# 8. Run complete unit and integration test suite (24 tests)
+# 9. Run complete unit and integration test suite (30 tests)
 python -m pytest tests/ -v
 ```
 
@@ -192,22 +187,37 @@ python -m pytest tests/ -v
 
 ## 🗺️ Project Roadmap
 
-- [x] Implement core `LoopedCrossAttention` operator with robust BPTT checkpointing.
-- [x] Integrate Shannon Entropy-based Adaptive Computation Time (ACT) for dynamic early exits.
-- [x] Activation VRAM $O(1)$ scaling validation on 16GB GPU (`scripts/test_decoder_vram.py`).
-- [x] Multi-step cascade loss training pipeline with micro-batch accumulation (`train.py`, `train_segmentation.py`).
-- [x] Attention Evolution Maps visualization tool (`scripts/visualize_attention.py`).
-- [x] Pascal VOC 2012 Dense Segmentation & Baseline benchmarks (`scripts/benchmark_segmentation.py`).
-- [x] Step-by-step edge purification trajectory evaluator (`scripts/eval_loop_trajectory.py`).
-- [x] 5-part comprehensive ablation study suite (`scripts/run_ablations.py`).
-- [x] Spatial patch occlusion robustness & ACT economic allocation (`scripts/benchmark_robustness_act.py`).
-- [ ] Fuse spatial-temporal features using YOLO11-Pose skeleton tokens for continuous video streams.
+* [x] Implement core `LoopedCrossAttention` operator with robust BPTT checkpointing.
+* [x] Integrate Shannon Entropy-based Adaptive Computation Time (ACT) for dynamic early exits.
+* [x] Activation VRAM $O(1)$ scaling validation on 16GB GPU (`scripts/test_decoder_vram.py`).
+* [x] Multi-step cascade loss training pipeline with micro-batch accumulation (`train.py`, `train_segmentation.py`).
+* [x] Attention Evolution Maps visualization tool (`scripts/visualize_attention.py`).
+* [x] Pascal VOC 2012 Dense Segmentation & Baseline benchmarks (`scripts/benchmark_segmentation.py`).
+* [x] Step-by-step edge purification trajectory evaluator (`scripts/eval_loop_trajectory.py`).
+* [x] 5-part comprehensive ablation study suite (`scripts/run_ablations.py`).
+* [x] Spatial patch occlusion robustness & ACT economic allocation (`scripts/benchmark_robustness_act.py`).
+* [ ] Fuse spatial-temporal features using YOLO11-Pose skeleton tokens for continuous video streams.
+
+---
+
+## 📄 Paper & Citation
+
+The paper is available on arXiv: [arXiv:2611.29180](https://arxiv.org/abs/2611.29180).
+
+```bibtex
+@article{axjing2026loopxdino,
+  title={loopxDINO: Dense Visual Prediction via Iterative Latent Reasoning},
+  author={axjing},
+  journal={arXiv preprint arXiv:2611.29180},
+  year={2026}
+}
+```
 
 ---
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please ensure that any architectural changes respect the hard **16GB VRAM constraint** philosophy and pass all 24 unit tests via `python -m pytest tests/ -v`.
+Contributions are welcome! Please ensure that any architectural changes respect the hard **16GB VRAM constraint** philosophy and pass all 30 unit tests via `python -m pytest tests/ -v`.
 
 ---
 

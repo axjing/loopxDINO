@@ -242,6 +242,7 @@ class DifferentiableACTController(nn.Module):
         """
         B = step_states[0].shape[0]
         device = step_states[0].device
+        dtype = step_states[0].dtype
         T = len(step_states)
 
         halting_probs = []
@@ -250,11 +251,11 @@ class DifferentiableACTController(nn.Module):
             h = self.halting_unit(state.mean(dim=1)).squeeze(-1)  # (B,)
             halting_probs.append(h)
 
-        halting_probs = torch.stack(halting_probs, dim=1)  # (B, T)
+        halting_probs = torch.stack(halting_probs, dim=1).to(dtype=dtype)  # (B, T)
 
         # Compute cumulative probabilities and Graves weights
-        cum_prob = torch.zeros(B, device=device)
-        weights = torch.zeros(B, T, device=device)
+        cum_prob = torch.zeros(B, device=device, dtype=dtype)
+        weights = torch.zeros(B, T, device=device, dtype=dtype)
         halting_step = torch.full((B,), T, dtype=torch.long, device=device)
         still_running = torch.ones(B, dtype=torch.bool, device=device)
 
@@ -285,7 +286,7 @@ class DifferentiableACTController(nn.Module):
             weights[unhalted, -1] += (1.0 - cum_prob[unhalted]).clamp(min=0.0)
 
         # Ponder cost: sum of steps weighted by halting probabilities + remainder
-        ponder_cost = halting_step.float() + (1.0 - cum_prob).clamp(min=0.0)
+        ponder_cost = halting_step.to(dtype=dtype) + (1.0 - cum_prob).clamp(min=0.0)
 
         # Weighted combination of states
         accumulated_state = torch.zeros_like(step_states[0])

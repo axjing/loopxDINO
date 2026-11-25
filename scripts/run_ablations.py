@@ -17,8 +17,8 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-from core.act import MultiStepCascadeLoss
-from core.decoder import LoopedCrossAttentionDecoder
+from loopxdino.act import MultiStepCascadeLoss
+from loopxdino.decoder import LoopedCrossAttentionDecoder
 
 
 def get_peak_vram_mb() -> float:

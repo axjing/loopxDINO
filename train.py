@@ -16,8 +16,8 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
 
-from core.act import MultiStepCascadeLoss
-from core.model import LoopxDINO
+from loopxdino.act import MultiStepCascadeLoss
+from loopxdino.model import LoopxDINO
 
 
 class SyntheticDenseDataset(Dataset):

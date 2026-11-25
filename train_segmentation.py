@@ -16,15 +16,16 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from core.act import MultiStepCascadeLoss
-from core.baselines import (
+from loopxdino.act import MultiStepCascadeLoss
+from loopxdino.baselines import (
     BaselineA_Linear,
     BaselineB_TransformerDecoder,
     BaselineC_TransformerDecoder,
 )
-from core.data import get_voc_dataloaders
-from core.metrics import SegmentationEvaluator
-from core.model import LoopxDINO
+from loopxdino.data import get_voc_dataloaders
+from loopxdino.loss import CombinedCEDiceLoss
+from loopxdino.metrics import SegmentationEvaluator
+from loopxdino.model import LoopxDINO
 
 
 def build_model(
@@ -37,12 +38,14 @@ def build_model(
     """Builds and returns requested model with trainable parameter count."""
     if model_type == "loopxdino":
         model = LoopxDINO(
-            backbone="facebook/dinov3-vitb16-pretrain-lvd1689m",
+            backbone="facebook/dinov2-base",
             num_loops=num_loops,
             task_head="mask",
             num_classes=num_classes,
             force_mock_backbone=force_mock,
             use_checkpoint=True,
+            use_mask_guidance=True,
+            use_multiscale=True,
         )
         trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     elif model_type == "baseline_a":
@@ -91,7 +94,7 @@ def train_one_epoch(
     for batch_idx, (images, queries, targets) in enumerate(dataloader):
         images = images.to(device, dtype=torch.bfloat16, non_blocking=True)
         targets = targets.to(device, non_blocking=True)
-        _B, _C, H, W = images.shape
+        _B = images.shape[0]
 
         # Use internal learned query bank if present, otherwise external queries
         if (
@@ -104,27 +107,8 @@ def train_one_epoch(
 
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             if model_type == "loopxdino":
-                # System 1: visual tokens
-                visual_memory, grid_size = model.extract_visual_features(
-                    images, return_grid=True
-                )
-                # System 2: trajectory of queries across loops
-                decoder_out = model.decoder(
-                    queries=queries,
-                    visual_memory=visual_memory,
-                    num_loops=model.num_loops,
-                    return_trajectory=True,
-                )
-                _, trajectory = decoder_out
-
-                # Project each intermediate reasoning loop to dense segmentation masks
-                step_masks = []
-                for q_step in trajectory[1:]:  # loops 1 to N
-                    mask_logits, _ = model.task_head(
-                        q_step, visual_memory, grid_size, out_size=(H, W)
-                    )
-                    step_masks.append(mask_logits)
-
+                out = model(images, queries, return_trajectory=True)
+                step_masks = out["step_masks"]
                 loss, _ = cascade_loss_fn(step_masks, targets)
             else:
                 # Baseline forward
@@ -152,7 +136,8 @@ def train_one_epoch(
             )
             print(
                 f"  Epoch [{epoch}] | Batch [{batch_idx + 1:2d}/{num_batches:2d}] "
-                f"| Loss: {loss.item():.4f} | Peak VRAM: {vram_mb:6.1f} MB"
+                f"| Loss: {loss.item():.4f} | Peak VRAM: {vram_mb:6.1f} MB",
+                flush=True,
             )
 
     elapsed = time.time() - start_time
@@ -167,6 +152,7 @@ def evaluate_segmentation(
     dataloader: DataLoader,
     device: str,
     num_classes: int = 21,
+    num_loops: int | None = None,
 ) -> dict[str, float]:
     model.eval()
     evaluator = SegmentationEvaluator(num_classes=num_classes, ignore_index=255)
@@ -185,7 +171,7 @@ def evaluate_segmentation(
             queries = queries.to(device, dtype=torch.bfloat16, non_blocking=True)
 
         if model_type == "loopxdino":
-            out = model(images, queries)
+            out = model(images, queries, num_loops=num_loops)
             if isinstance(out, tuple):
                 mask_logits = out[0]
             elif isinstance(out, dict):
@@ -215,7 +201,13 @@ def parse_args():
         choices=["loopxdino", "baseline_a", "baseline_b", "baseline_c"],
     )
     parser.add_argument(
-        "--epochs", type=int, default=2, help="Number of training epochs"
+        "--epochs", type=int, default=12, help="Number of training epochs"
+    )
+    parser.add_argument(
+        "--dice_weight",
+        type=float,
+        default=1.0,
+        help="Weight for MultiClassDiceLoss in hybrid loss",
     )
     parser.add_argument(
         "--batch_size", type=int, default=4, help="Micro-batch size per iteration"
@@ -239,8 +231,20 @@ def parse_args():
     parser.add_argument(
         "--force_synthetic",
         action="store_true",
-        default=True,
+        default=False,
         help="Use synthetic VOC dataset for testing",
+    )
+    parser.add_argument(
+        "--force_mock",
+        action="store_true",
+        default=False,
+        help="Use mock ViT backbone instead of pretrained DINO",
+    )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=2,
+        help="DataLoader worker processes",
     )
     parser.add_argument(
         "--save_dir",
@@ -254,16 +258,18 @@ def parse_args():
 def main():
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    print("=" * 70)
-    print(" Pascal VOC 2012 Segmentation Trainer")
+    print("=" * 70, flush=True)
+    print(" Pascal VOC 2012 Segmentation Trainer", flush=True)
     print(
-        f" Model: {args.model_type} | Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}"
+        f" Model: {args.model_type} | Device: {torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'CPU'}",
+        flush=True,
     )
     print(
-        f" Micro-batch: {args.batch_size} | Accumulation: {args.accum_steps} | Effective Batch: {args.batch_size * args.accum_steps}"
+        f" Micro-batch: {args.batch_size} | Accumulation: {args.accum_steps} | Effective Batch: {args.batch_size * args.accum_steps}",
+        flush=True,
     )
-    print(f" Resolution: {args.img_size}x{args.img_size} | Precision: torch.bfloat16")
-    print("=" * 70)
+    print(f" Resolution: {args.img_size}x{args.img_size} | Precision: torch.bfloat16", flush=True)
+    print("=" * 70, flush=True)
 
     # 1. Load Data
     train_loader, val_loader = get_voc_dataloaders(
@@ -272,9 +278,11 @@ def main():
         img_size=args.img_size,
         download=args.download,
         force_synthetic=args.force_synthetic,
+        num_workers=args.num_workers,
     )
     print(
-        f"Dataset ready: {len(train_loader.dataset)} train samples, {len(val_loader.dataset)} val samples."
+        f"Dataset ready: {len(train_loader.dataset)} train samples, {len(val_loader.dataset)} val samples.",
+        flush=True,
     )
 
     # 2. Build Model
@@ -282,11 +290,12 @@ def main():
         model_type=args.model_type,
         num_classes=21,
         num_loops=args.num_loops,
-        force_mock=True,
+        force_mock=args.force_mock,
         device=device,
     )
     print(
-        f"Trainable Decoder/Head Parameters: {trainable_params:,} ({trainable_params / 1e6:.2f}M)"
+        f"Trainable Decoder/Head Parameters: {trainable_params:,} ({trainable_params / 1e6:.2f}M)",
+        flush=True,
     )
 
     # 3. Setup Optimizer & Loss Functions
@@ -296,9 +305,14 @@ def main():
         optimizer, T_max=args.epochs, eta_min=1e-6
     )
 
-    ce_criterion = nn.CrossEntropyLoss(ignore_index=255)
+    criterion = CombinedCEDiceLoss(
+        num_classes=21,
+        ignore_index=255,
+        ce_weight=1.0,
+        dice_weight=args.dice_weight,
+    )
     cascade_loss = MultiStepCascadeLoss(
-        base_criterion=ce_criterion,
+        base_criterion=criterion,
         weighting_strategy="linear_ramp",
     )
 
@@ -312,7 +326,7 @@ def main():
             model_type=args.model_type,
             dataloader=train_loader,
             optimizer=optimizer,
-            criterion=ce_criterion,
+            criterion=criterion,
             cascade_loss_fn=cascade_loss,
             accum_steps=args.accum_steps,
             device=device,
@@ -330,7 +344,8 @@ def main():
         )
         print(
             f"Epoch [{epoch}/{args.epochs}] in {duration:.2f}s | Train Loss: {loss:.4f} "
-            f"| Val mIoU: {val_metrics['mIoU']}% | Boundary IoU: {val_metrics['Boundary_IoU']}%\n"
+            f"| Val mIoU: {val_metrics['mIoU']}% | Boundary IoU: {val_metrics['Boundary_IoU']}%\n",
+            flush=True,
         )
 
         if val_metrics["mIoU"] > best_miou:
@@ -345,7 +360,33 @@ def main():
                 ckpt_path,
             )
 
-    print(f"Training finished successfully! Best Val mIoU: {best_miou:.2f}%\n")
+    print(f"Training finished successfully! Best Val mIoU: {best_miou:.2f}%\n", flush=True)
+
+    # 5. For loopxDINO, evaluate test-time compute depth scaling
+    if args.model_type == "loopxdino":
+        best_ckpt = os.path.join(args.save_dir, f"{args.model_type}_best.pt")
+        if os.path.exists(best_ckpt):
+            ckpt_data = torch.load(best_ckpt, map_location=device, weights_only=False)
+            model.load_state_dict(ckpt_data["model_state"])
+            print(f"Loaded best checkpoint from epoch {ckpt_data.get('epoch', '?')} with Val mIoU: {ckpt_data.get('val_metrics', {}).get('mIoU', 0.0):.2f}% for test-time scaling analysis.", flush=True)
+
+        print("=" * 70, flush=True)
+        print(" Evaluating Test-Time Compute Depth Scaling (T = 1, 2, 4, 8, 16)...", flush=True)
+        print("=" * 70, flush=True)
+        for t in [1, 2, 4, 8, 16]:
+            m = evaluate_segmentation(
+                model=model,
+                model_type=args.model_type,
+                dataloader=val_loader,
+                device=device,
+                num_classes=21,
+                num_loops=t,
+            )
+            print(
+                f"  Test-Time Depth T = {t:2d} | Val mIoU: {m['mIoU']:5.2f}% | Boundary IoU: {m['Boundary_IoU']:5.2f}%",
+                flush=True,
+            )
+        print("=" * 70, flush=True)
 
 
 if __name__ == "__main__":

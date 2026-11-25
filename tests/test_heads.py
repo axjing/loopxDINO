@@ -1,19 +1,26 @@
 import torch
 
-from core.heads import ClassificationHead, DenseMaskHead
+from loopxdino.heads import ClassificationHead, DenseMaskHead
 
 
 def test_dense_mask_head():
-    head = DenseMaskHead(d_model=768, num_classes=21, feat_dim=128, patch_size=16)
-    queries = torch.randn(2, 5, 768)
-    visual = torch.randn(2, 256, 768)
-    grid_size = (16, 16)
+    for mod_mode in ["global", "per_query"]:
+        head = DenseMaskHead(
+            d_model=768,
+            num_classes=21,
+            feat_dim=128,
+            patch_size=16,
+            modulation_mode=mod_mode,
+        )
+        queries = torch.randn(2, 5, 768)
+        visual = torch.randn(2, 256, 768)
+        grid_size = (16, 16)
 
-    mask_logits, class_logits = head(
-        queries, visual, grid_size=grid_size, out_size=(256, 256)
-    )
-    assert mask_logits.shape == (2, 5, 256, 256)
-    assert class_logits.shape == (2, 5, 21)
+        mask_logits, class_logits = head(
+            queries, visual, grid_size=grid_size, out_size=(256, 256)
+        )
+        assert mask_logits.shape == (2, 5, 256, 256)
+        assert class_logits.shape == (2, 5, 21)
 
 
 def test_classification_head():

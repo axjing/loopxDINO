@@ -1,6 +1,6 @@
 import torch
 
-from core.backbone import DINOBackbone
+from loopxdino.backbone import DINOBackbone
 
 
 def test_backbone_frozen():

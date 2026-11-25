@@ -1,7 +1,7 @@
 import torch
 
-from core.data import SyntheticVOCDataset, get_voc_dataloaders
-from core.metrics import SegmentationEvaluator, extract_boundary_band
+from loopxdino.data import SyntheticVOCDataset, get_voc_dataloaders
+from loopxdino.metrics import SegmentationEvaluator, extract_boundary_band
 
 
 def test_synthetic_voc_dataset():

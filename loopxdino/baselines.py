@@ -11,8 +11,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from core.backbone import DINOBackbone
-from core.heads import DenseMaskHead
+from loopxdino.backbone import DINOBackbone
+from loopxdino.heads import DenseMaskHead
 
 
 class BaselineA_Linear(nn.Module):
@@ -23,7 +23,7 @@ class BaselineA_Linear(nn.Module):
 
     def __init__(
         self,
-        backbone: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        backbone: str = "facebook/dinov2-base",
         num_classes: int = 21,
         force_mock_backbone: bool = False,
     ):
@@ -117,7 +117,7 @@ class BaselineTransformerBase(nn.Module):
     def __init__(
         self,
         num_layers: int,
-        backbone: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        backbone: str = "facebook/dinov2-base",
         num_classes: int = 21,
         force_mock_backbone: bool = False,
     ):
@@ -177,7 +177,7 @@ class BaselineB_TransformerDecoder(BaselineTransformerBase):
 
     def __init__(
         self,
-        backbone: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        backbone: str = "facebook/dinov2-base",
         num_classes: int = 21,
         force_mock_backbone: bool = False,
     ):
@@ -194,7 +194,7 @@ class BaselineC_TransformerDecoder(BaselineTransformerBase):
 
     def __init__(
         self,
-        backbone: str = "facebook/dinov3-vitb16-pretrain-lvd1689m",
+        backbone: str = "facebook/dinov2-base",
         num_classes: int = 21,
         force_mock_backbone: bool = False,
     ):

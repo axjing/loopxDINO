@@ -13,8 +13,8 @@ import sys
 
 import torch
 
-from core.decoder import LoopedCrossAttentionDecoder
-from core.model import LoopxDINO
+from loopxdino.decoder import LoopedCrossAttentionDecoder
+from loopxdino.model import LoopxDINO
 
 
 def get_peak_memory_mb() -> float:

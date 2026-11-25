@@ -10,9 +10,9 @@ import matplotlib.pyplot as plt
 import torch
 from torch.utils.data import DataLoader
 
-from core.data import get_voc_dataloaders
-from core.metrics import SegmentationEvaluator
-from core.model import LoopxDINO
+from loopxdino.data import get_voc_dataloaders
+from loopxdino.metrics import SegmentationEvaluator
+from loopxdino.model import LoopxDINO
 
 
 @torch.no_grad()

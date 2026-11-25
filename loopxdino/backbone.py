@@ -59,8 +59,11 @@ class MockDINOViT(nn.Module):
         )
         self.blocks = nn.TransformerEncoder(encoder_layer, num_layers=depth)
         self.norm = nn.LayerNorm(embed_dim)
+        self.depth = depth
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def forward(
+        self, x: torch.Tensor, return_multiscale: bool = False
+    ) -> tuple[torch.Tensor, torch.Tensor] | tuple[torch.Tensor, torch.Tensor, tuple[torch.Tensor, ...]]:
         B, _C, _H, _W = x.shape
         x_patch = self.patch_embed(x)  # (B, D, H/p, W/p)
         Hp, Wp = x_patch.shape[2], x_patch.shape[3]
@@ -87,6 +90,20 @@ class MockDINOViT(nn.Module):
                 x_seq = x_seq + pos
             else:
                 x_seq = x_seq + self.pos_embed[:, : x_seq.shape[1], :]
+
+        if return_multiscale:
+            multiscale_tokens = []
+            cur_seq = x_seq
+            # Intermediate checkpoints at 1/3, 2/3, and 3/3 depth
+            target_layers = {max(1, self.depth // 3), max(1, 2 * self.depth // 3), self.depth}
+            for i, layer in enumerate(self.blocks.layers, 1):
+                cur_seq = layer(cur_seq)
+                if i in target_layers:
+                    normed = self.norm(cur_seq)
+                    multiscale_tokens.append(normed[:, 1:])
+            cls_token = cur_seq[:, 0]
+            patch_tokens = cur_seq[:, 1:]
+            return cls_token, patch_tokens, tuple(multiscale_tokens)
 
         x_out = self.blocks(x_seq)
         x_out = self.norm(x_out)
@@ -143,13 +160,32 @@ class DINOBackbone(nn.Module):
         try:
             from transformers import AutoConfig, AutoModel
 
-            # Try loading config first to see if repo is accessible
-            config = AutoConfig.from_pretrained(model_name)
-            model = AutoModel.from_pretrained(model_name, config=config)
-            self.embed_dim = getattr(config, "hidden_size", self.embed_dim)
-            if hasattr(config, "patch_size"):
-                self.patch_size = config.patch_size
-            return model
+            # Candidate names: requested model_name, and fallback to verified dinov2-base
+            candidates = [model_name]
+            if "dinov3" in model_name:
+                if "vitl" in model_name or "large" in model_name:
+                    candidates.append("facebook/dinov2-large")
+                elif "vits" in model_name or "small" in model_name:
+                    candidates.append("facebook/dinov2-small")
+                else:
+                    candidates.append("facebook/dinov2-base")
+
+            last_err = None
+            for cand in candidates:
+                try:
+                    config = AutoConfig.from_pretrained(cand)
+                    model = AutoModel.from_pretrained(cand, config=config)
+                    self.embed_dim = getattr(config, "hidden_size", self.embed_dim)
+                    if hasattr(config, "patch_size"):
+                        self.patch_size = config.patch_size
+                    self.model_name = cand
+                    self._is_mock = False
+                    return model
+                except Exception as e:  # noqa: BLE001
+                    last_err = e
+                    continue
+
+            raise last_err or RuntimeError(f"Failed to load any candidate from {candidates}")
         except Exception as e:  # noqa: BLE001
             # Fallback for offline mode, gated token requirement, or mock validation
             warnings.warn(
@@ -186,13 +222,20 @@ class DINOBackbone(nn.Module):
         self,
         pixel_values: torch.Tensor,
         return_patch_grid: bool = False,
-    ) -> torch.Tensor | tuple[torch.Tensor, tuple[int, int]]:
+        return_multiscale: bool = False,
+    ) -> (
+        torch.Tensor
+        | tuple[torch.Tensor, tuple[int, int]]
+        | tuple[torch.Tensor, tuple[torch.Tensor, ...], tuple[int, int]]
+        | tuple[torch.Tensor, tuple[torch.Tensor, ...]]
+    ):
         """
         Extract dense visual features without computing gradients.
 
         Args:
             pixel_values: Input image tensor of shape (B, 3, H, W).
-            return_patch_grid: If True, returns (features, (grid_h, grid_w)).
+            return_patch_grid: If True, returns patch grid dimensions (grid_h, grid_w).
+            return_multiscale: If True, returns intermediate multi-scale patch tokens (F_4, F_8, F_12).
 
         Returns:
             patch_tokens: Dense visual feature tensor of shape (B, S_v, embed_dim),
@@ -201,22 +244,43 @@ class DINOBackbone(nn.Module):
         _B, _C, H, W = pixel_values.shape
         grid_h = H // self.patch_size
         grid_w = W // self.patch_size
+        num_patches = grid_h * grid_w
 
         if self._is_mock:
-            _, patch_tokens = self.model(pixel_values)
+            if return_multiscale:
+                _, patch_tokens, multiscale_tokens = self.model(
+                    pixel_values, return_multiscale=True
+                )
+            else:
+                _, patch_tokens = self.model(pixel_values)
+                multiscale_tokens = None
         else:
             # Hugging Face ViT / DINOv2 / DINOv3 model output
-            outputs = self.model(pixel_values, output_hidden_states=False)
-            last_hidden_state = (
-                outputs.last_hidden_state
-            )  # (B, 1 + S_v, D) or (B, S_v, D)
-            # Robust prefix handling: whether 1 CLS token or K register tokens (e.g. DINOv2 registers)
-            # are present as prefixes, the last grid_h * grid_w tokens are guaranteed to be the spatial patches.
-            if last_hidden_state.shape[1] >= grid_h * grid_w:
-                patch_tokens = last_hidden_state[:, -(grid_h * grid_w) :, :]
+            outputs = self.model(pixel_values, output_hidden_states=return_multiscale)
+            last_hidden_state = outputs.last_hidden_state  # (B, 1 + S_v, D) or (B, S_v, D)
+            if last_hidden_state.shape[1] >= num_patches:
+                patch_tokens = last_hidden_state[:, -num_patches:, :]
             else:
                 patch_tokens = last_hidden_state
 
-        if return_patch_grid:
+            if return_multiscale:
+                hs = outputs.hidden_states
+                n_layers = len(hs) - 1
+                l4_idx = max(1, n_layers // 3)
+                l8_idx = max(1, 2 * n_layers // 3)
+                l12_idx = n_layers
+
+                feat_4 = hs[l4_idx][:, -num_patches:, :]
+                feat_8 = hs[l8_idx][:, -num_patches:, :]
+                feat_12 = hs[l12_idx][:, -num_patches:, :]
+                multiscale_tokens = (feat_4, feat_8, feat_12)
+            else:
+                multiscale_tokens = None
+
+        if return_multiscale and return_patch_grid:
+            return patch_tokens, multiscale_tokens, (grid_h, grid_w)
+        elif return_multiscale:
+            return patch_tokens, multiscale_tokens
+        elif return_patch_grid:
             return patch_tokens, (grid_h, grid_w)
         return patch_tokens

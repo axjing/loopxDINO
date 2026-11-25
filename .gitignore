@@ -5,7 +5,26 @@ __pycache__/
 
 # C extensions
 *.so
+# LaTeX build artifacts and arXiv draft bundles
+*.aux
+*.log
+*.bbl
+*.blg
+*.out
+*.synctex.gz
+arxiv*
+arxiv*.tar.gz
+arxiv*.zip
+arxiv_bundle/
 
+# Local documentation, agent rules, & paper translations
+AGENTS.md
+docs/
+scripts/*arxiv*
+assets/fig[1-5]_*
+!assets/fig1_architecture.png
+temp_backup_*
+data/
 # Distribution / packaging
 .Python
 build/
@@ -219,3 +238,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Agent Customizations
+.agents/
+.agent/
+

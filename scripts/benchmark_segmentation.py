@@ -18,14 +18,14 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from core.baselines import (
+from loopxdino.baselines import (
     BaselineA_Linear,
     BaselineB_TransformerDecoder,
     BaselineC_TransformerDecoder,
 )
-from core.data import get_voc_dataloaders
-from core.metrics import SegmentationEvaluator
-from core.model import LoopxDINO
+from loopxdino.data import get_voc_dataloaders
+from loopxdino.metrics import SegmentationEvaluator
+from loopxdino.model import LoopxDINO
 
 
 def reset_cuda():

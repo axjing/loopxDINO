@@ -11,7 +11,7 @@ import time
 
 import torch
 
-from core.model import LoopxDINO
+from loopxdino.model import LoopxDINO
 
 
 def benchmark_throughput(

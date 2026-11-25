@@ -13,9 +13,9 @@ from typing import Any
 import matplotlib.pyplot as plt
 import torch
 
-from core.data import get_voc_dataloaders
-from core.metrics import SegmentationEvaluator
-from core.model import LoopxDINO
+from loopxdino.data import get_voc_dataloaders
+from loopxdino.metrics import SegmentationEvaluator
+from loopxdino.model import LoopxDINO
 
 
 def inject_patch_occlusion(

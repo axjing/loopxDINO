@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn.functional as F
 
-from core.model import LoopxDINO
+from loopxdino.model import LoopxDINO
 
 
 def compute_attention_metrics(attn_maps: list[torch.Tensor]) -> list[dict]:

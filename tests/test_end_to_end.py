@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from core.model import LoopxDINO
+from loopxdino.model import LoopxDINO
 
 
 def test_loopxdino_forward_backward_gpu():
@@ -105,3 +105,37 @@ def test_loopxdino_learned_query_bank():
     loss = mask_logits.sum()
     loss.backward()
     assert model.learned_query_bank.grad is not None
+
+
+def test_loopxdino_differentiable_act_mode():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
+
+    model = LoopxDINO(
+        backbone="facebook/dinov3-vitb16-pretrain-lvd1689m",
+        num_loops=4,
+        force_mock_backbone=True,
+        task_head="classification",
+        num_classes=10,
+    ).to(device, dtype=dtype)
+
+    img = torch.randn(2, 3, 256, 256, device=device, dtype=dtype)
+    res = model(img, act_mode="differentiable")
+
+    assert "output" in res
+    assert "ponder_cost" in res
+    assert "step_weights" in res
+    assert res["step_weights"].shape == (2, 4)
+    assert res["ponder_cost"].shape == (2,)
+
+    # Joint loss backward
+    total_loss = res["output"].sum() + 0.05 * res["ponder_cost"].sum()
+    total_loss.backward()
+
+    # Check halting unit gradients
+    halting_grads = [
+        p.grad
+        for p in model.diff_act_controller.halting_unit.parameters()
+        if p.grad is not None
+    ]
+    assert len(halting_grads) > 0
